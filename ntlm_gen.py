@@ -1,96 +1,162 @@
 #!/usr/bin/env python3
 
-from binascii import hexlify
-from hashlib import new as new_hash
+# By Robert Gilbert (amroot.com)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+from argparse import ArgumentParser
+from datetime import datetime
 from hashlib import md5
+from hashlib import new as new_hash
+from hmac import new as new_hmac
 from pathlib import Path
 from secrets import token_bytes
 from secrets import token_hex
 from sys import argv
-import hmac
-from random import randint
 
-def helper():
-    print('Usage:')
-    print(f'[i] {argv[0]} [number of hashes] or [dictionary]')
-    print(f'[i] ex: {argv[0]} 100\n\tprint 100 random unlikely to be cracked hashes')
-    print(f'[i] ex: {argv[0]} ./wordlist\n\ttransform each word to an NTLM hash')
-    print(f'[i] ex: {argv[0]} transform a single word to an NTLM hash')
-    print(f'[i] ex: {argv[0]} -1 return NTLMv1 hash instead of NTLMv2')
-    exit()
+def parse_args():
+	parser = ArgumentParser()
+	parser.add_argument('--rand',
+        help='Generate this number of random passwords that is unlikely to be cracked.',
+        type=int)
+	parser.add_argument('--word',
+		help='Generate an NTLMv(1,2) token from this word.')
+	parser.add_argument('--file',
+		help='Generate a token per word (one per line) from a file')
+	parser.add_argument('-1', '--v1',
+        action='store_true',
+        help='Generate NTLMv1 rather than NTLMv2')
+	parser.add_argument('--domain',
+		help='Custom domain. Default is "test.me.local"')
+	parser.add_argument('--user',
+		help='Custom user. Default is "Recover"')
+	return parser
+
+
+def unix_to_nt_time(time_convert):
+    return int((time_convert + 116444736000000000) * 10000000)
 
 
 def NTLMv1(transform):
-    hash = new_hash('md4', transform.encode('utf-16le')).digest()
-    return hexlify(hash).decode()
+    hash = new_hash('md4', transform.encode('utf-16le')).hexdigest()
+    print(hash)
+    return hash
 
 
-def NTLMv2(transform):
-    ntlm = NTLMv1(transform)
-    # combine username and domain to hmac_md5
-    user = 'Recover'
-    domain = 'Me'
-    #user_domain = (user.upper() + domain).encode('utf-16le').encode('hex')
-    #user_domain_hmac = hmac.new(ntlm.decode('hex'),user_domain.decode('hex'), hashlib.md5).hexdigest()
+def NTLMv2(transform, domain='test.me.local', user='Recover', rid=1000):
+    """ Retruns NTLMv2 hash(s)
+    Param transform (int, str):
+        The number of random hashes to generate (hard to crack),
+        A single word to tranform to NTLMv2
+        A file containing a list of items to transform
+    Param domain (str): the domain to use to generate hash and included in output
+    Param user (str): the user to use to generate hash and included in output
+    """
 
+    # NTLMv1 is the HMAC Key for NTLMv2
+    NTLM = NTLMv1(transform)
 
-    ## User
-    #Administrator
-
-    ## Computer / Domain
-    #::WIN-487IMQOIA8E
-    domain = 'test.me.local'
-
-    ## Random Client Hash
-    #:997b18cc61099ba2
+    # Random Client Hash
     random_client_hash = token_hex(8)
 
-    ## Password
-    #:3CC46296B0CCFC7A231D918AE1DAE521
-
-    ## Blob
-    #:0101000000000000B09B51939BA6D40140C54ED46AD58E890000000002000E004E004F004D00410054004300480001000A0053004D0042003100320004000A0053004D0042003100320003000A0053004D0042003100320005000A0053004D0042003100320008003000300000000000000000000000003000004289286EDA193B087E214F3E16E2BE88FEC5D9FF73197456C9A6861FF5B5D3330000000000000000
-    ## look at this blob stuff!: https://www.reddit.com/r/AskNetsec/comments/mctozt/decoding_netntlmv2_blob/
+    # Blob
+    # look at this blob stuff!
+    # https://www.reddit.com/r/AskNetsec/comments/mctozt/decoding_netntlmv2_blob/
+    # Will update this from a static to dynamic value in the next version
     blob = '0101000000000000B09B51939BA6D40140C54ED46AD58E890000000002000E004E004F004D00410054004300480001000A0053004D0042003100320004000A0053004D0042003100320003000A0053004D0042003100320005000A0053004D0042003100320008003000300000000000000000000000003000004289286EDA193B087E214F3E16E2BE88FEC5D9FF73197456C9A6861FF5B5D3330000000000000000'
-
-    ntlm = NTLMv1(transform)
-    #NTLMv2 Hash     = HMAC-MD5(NT Hash, uppercase(username) + target)
+    # Blob breakdown for later
+    # I'm not 100% on the blob so the following will likely show my ignorance
+    # create a random signature because why not    
+    # Made up signature is the last two digits of the timestamp converted to a binary value
+    blob_sig = bin(int(str(datetime.now().timestamp())[-2:]))
+    blob_sig = f'{blob_sig.replace("0b",""):0<8}'
+    #print(blob_sig)
+    # the timestamp is an NT timestamp in hex format. I this might actually be correct
+    nt_timestmap = unix_to_nt_time(int(datetime.now().timestamp()))
+    nt_timestamp = hex(nt_timestmap).replace('0x','').upper()
+    # random hex nonce so this is probably correct
+    nonce = token_hex(8)
+    reserved = 00000000
+    # the target info block can be learned later from so many NTLM scripts. Please complete later.
+    '''
+    Blob sig: 01010000
+    reserved: 00000000
+    timestamp: B09B51939BA6D401 (2019-01-07T15:13:42Z)
+    nonce:     40C54ED46AD58E89 (random value)
+    reserved: 00000000
+    target info block:
+        MsvAvNbDomainName: NOMATCH 02000E004E004F004D004100540043004800
+        MsvAvNbComputerName: SMB12 01000A0053004D00420031003200
+        MsvAvDnsDomainName: SMB12 04000A0053004D00420031003200
+        MsvAvDnsComputerName: SMB12 03000A0053004D00420031003200
+        MsvAvDnsTreeName: SMB12 05000A0053004D00420031003200
+        MsvAvSingleHost 08003000 size: 30000000 (48 bytes)
+        z4: 00000000
+        customdata: 0000000000300000
+        machineid: 4289286EDA193B087E214F3E16E2BE88FEC5D9FF73197456C9A6861FF5B5D333 (random value generated at boot)
+        MsvAvEOL 00000000
+        Reserved 00000000
+    '''
+    # Create first round NTLMv2 Hash
     payload = f'{user.upper()}{domain}'
-    ntlmv2_hash = hmac.new(ntlm.encode(), payload.encode(), md5)
+    NTLMv2_hash = new_hmac(NTLM.encode(), payload.encode(), md5)
+    # enum this later
+    rid += 1
 
-    #NTLMv2 Update  = HMAC-MD5(NTLMv2 Hash, challenge + blob)
+    # Create round two NTLMv2 Hash
     payload = f'{random_client_hash}{blob}'
-    ntlmv2_hash = hmac.new(ntlmv2_hash.hexdigest().encode(), payload.encode(), md5)
+    NTLMv2_hash = new_hmac(NTLMv2_hash.hexdigest().encode(), payload.encode(), md5)
 
-    NTLMv2_final = f'{user}::{domain}:{random_client_hash}:{ntlmv2_hash.hexdigest().upper()}:{blob}'
+    # Put it all together for hacking and cracking and tapping and snapping
+    print(f'{domain}\\{user}:{rid}:{random_client_hash}:{NTLMv2_hash.hexdigest().upper()}:::')
+    NTLMv2_final = f'{user}::{domain}:{random_client_hash}:{NTLMv2_hash.hexdigest().upper()}:{blob}'
 
     return NTLMv2_final
 
+def main():
 
-if len(argv) == 1:
-    helper()
-elif argv[1].isnumeric():
-    for __i__ in range(int(argv[1])):
-        rand = token_bytes(16).decode('latin-1')
-        #print(NTLMv1(rand))
-        print(NTLMv2(rand))
-elif Path(argv[1]).is_file():
-    with open(argv[1]) as fh:
-        for word in fh:
-            print(NTLMv2(word.strip()))
-elif type(argv[1]) == str:
-    print(NTLMv2(argv[1].strip()))
-    print()
-    #print('looking for something like this:')
-    #print('Administrator::WIN-487IMQOIA8E:997b18cc61099ba2:3CC46296B0CCFC7A231D918AE1DAE521:0101000000000000B09B51939BA6D40140C54ED46AD58E890000000002000E004E004F004D00410054004300480001000A0053004D0042003100320004000A0053004D0042003100320003000A0053004D0042003100320005000A0053004D0042003100320008003000300000000000000000000000003000004289286EDA193B087E214F3E16E2BE88FEC5D9FF73197456C9A6861FF5B5D3330000000000000000')
-else:
-    helper()
+    parser = parse_args()
+    args = parser.parse_args()
+
+    if args.v1:
+        v1 = True
+    else:
+        v1 = False
+
+    if args.rand:
+        for __i__ in range(int(args.rand)):
+            rand = token_bytes(16).decode('latin-1')
+            #print(NTLMv1(rand))
+            print(NTLMv2(rand))
+    elif args.word:
+        if v1:
+            print(NTLMv1(args.word.strip()))
+        else:
+            print(NTLMv2(args.word.strip()))
+    elif args.file:
+        if Path(args.file).is_file():
+            with open(args.file) as fh:
+                for word in fh:
+                    print(NTLMv2(word.strip()))
+        else:
+            print('File passed but could not open file.')
+            exit()
+    else:
+        parser.error('No action requested, add --rand, --word, or --file')
 
 
-'''
-import hmac, hashlib
-ResponseKeyNT = b'myPasswd, testUser, example.com'
-m = hmac.new(ResponseKeyNT, digestmod=hashlib.md5)
-m.hexdigest()
-'''
- 
+if __name__ == '__main__':
+    main()
+
