@@ -25,23 +25,37 @@ from pathlib import Path
 from secrets import token_bytes
 from secrets import token_hex
 from sys import argv
+from pyDes import des
+from pyDes import PAD_PKCS5
+from unicodedata import normalize
+
 
 def parse_args():
 	parser = ArgumentParser()
 	parser.add_argument('--rand',
         help='Generate this number of random passwords that is unlikely to be cracked.',
         type=int)
+	parser.add_argument('--rid',
+        help='Start at this Relative ID (RID).',
+        type=int,
+        default=1000)
 	parser.add_argument('--word',
 		help='Generate an NTLMv(1,2) token from this word.')
 	parser.add_argument('--file',
 		help='Generate a token per word (one per line) from a file')
 	parser.add_argument('-1', '--v1',
-        action='store_true',
+        action='store_false',
         help='Generate NTLMv1 rather than NTLMv2')
+	parser.add_argument('-lm',
+        action='store_false',
+        help='Generate LAN Manager')
+	parser.add_argument('-lmntlm',
+        action='store_false',
+        help='Generate LM:NTLM Pair in pwdump() format')
 	parser.add_argument('--domain',
 		help='Custom domain. Default is "test.me.local"')
 	parser.add_argument('--user',
-		help='Custom user. Default is "Recover"')
+		help='Custom static user. Default is randomly generated.')
 	return parser
 
 
@@ -49,17 +63,40 @@ def unix_to_nt_time(time_convert):
     return int((time_convert + 116444736000000000) * 10000000)
 
 
+def LM(transform):
+    # Magic key:
+    magic_key = 'KGS!+#$%'
+    # DES can't deal with unicode so transform it to a string
+    # https://docs.python.org/3/library/unicodedata.html#unicodedata.normalize
+    transform = normalize('NFKD', transform).encode('ascii', 'ignore')
+    key = des(magic_key)
+    hash = key.encrypt(transform, padmode=PAD_PKCS5).hex()
+    return hash
+
+
 def NTLMv1(transform):
     hash = new_hash('md4', transform.encode('utf-16le')).hexdigest()
-    print(hash)
     return hash
+
+
+def LM_NTLM_pair(transform, domain='test.me.local', user='recover', rid=1000):
+    """ Returns LM NTLM pair in pwdump format
+    Param transform (str): the item to hash (secret, password, whatever)
+    Param domain (str): the domain to use in the pwdump output
+    Param user (str): the user to display in the pwdump output
+    Param rid (int): identifier for pwdump
+    """ 
+    lm_hash = LM(transform)
+    NTLM = NTLMv1(transform)
+
+    return (f'{domain}\\{user}:{rid}:{lm_hash.upper()}:{NTLM.upper()}:::')
 
 
 def NTLMv2(transform, domain='test.me.local', user='Recover', rid=1000):
     """ Retruns NTLMv2 hash(s)
     Param transform (int, str):
         The number of random hashes to generate (hard to crack),
-        A single word to tranform to NTLMv2
+        A single word to transform to NTLMv2
         A file containing a list of items to transform
     Param domain (str): the domain to use to generate hash and included in output
     Param user (str): the user to use to generate hash and included in output
@@ -120,28 +157,57 @@ def NTLMv2(transform, domain='test.me.local', user='Recover', rid=1000):
     NTLMv2_hash = new_hmac(NTLMv2_hash.hexdigest().encode(), payload.encode(), md5)
 
     # Put it all together for hacking and cracking and tapping and snapping
-    print(f'{domain}\\{user}:{rid}:{random_client_hash}:{NTLMv2_hash.hexdigest().upper()}:::')
+    #print(f'{domain}\\{user}:{rid}:{random_client_hash}:{NTLMv2_hash.hexdigest().upper()}:::')
     NTLMv2_final = f'{user}::{domain}:{random_client_hash}:{NTLMv2_hash.hexdigest().upper()}:{blob}'
 
     return NTLMv2_final
 
+def user_gen(user_length=8):
+    """ Returns a username according to length (really just a hex value divided by 2)
+    Param user_length (int): the length of the username
+    """
+    length = int(user_length/2)
+    username = token_hex(length)
+    return username.upper()
+
+
 def main():
+    start_time = datetime.now()
 
     parser = parse_args()
     args = parser.parse_args()
+    v1 = False
+    lm = False
+    lmntlm = False
+    rid = 1000
 
+    if args.lmntlm:
+        lmntlm = True
     if args.v1:
         v1 = True
-    else:
-        v1 = False
-
+    if args.lm:
+        lm = True
+    if args.rid:
+        rid = args.rid   
+    
+    # for time, i only need pairs right now. the can be worked out later
     if args.rand:
         for __i__ in range(int(args.rand)):
-            rand = token_bytes(16).decode('latin-1')
-            #print(NTLMv1(rand))
-            print(NTLMv2(rand))
+            transform = token_bytes(16).decode('latin-1')
+            if lmntlm:
+                pwdump = LM_NTLM_pair(transform, user=user_gen(), rid=rid)                
+            elif v1:
+                pwdump = NTLMv1(transform)
+            elif lm:
+                pwdump = LM(transform)
+            else:
+                pwdump = NTLMv2(transform, user=user_gen(), rid=rid)
+            rid += 1
+            print(pwdump)
     elif args.word:
-        if v1:
+        if lm:
+            print(LM(args.word.strip()))
+        elif v1:
             print(NTLMv1(args.word.strip()))
         else:
             print(NTLMv2(args.word.strip()))
@@ -155,7 +221,7 @@ def main():
             exit()
     else:
         parser.error('No action requested, add --rand, --word, or --file')
-
+    print(datetime.now() - start_time)
 
 if __name__ == '__main__':
     main()
