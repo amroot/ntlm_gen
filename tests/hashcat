@@ -1,0 +1,4 @@
+hashcat -a 0 -m 3000 example_LM.hash example.dict
+hashcat -a 0 -m 1000 example_NTLM.hash example.dict
+hashcat -a 0 -m 5500 example_NTLMv1.hash example.dict
+hashcat -a 0 -m 5600 example_NTLMv1.hash example.dict
