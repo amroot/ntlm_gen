@@ -57,8 +57,7 @@ def get_args():
  
     parser.add_argument('--rand-pass',
         type=int,
-        default=0,
-        help='Generate random passwords of this length. Default is 16')
+        help='Generate random passwords of this length.')
  
     parser.add_argument('--password',
         help='Generate a hash/token from this string.')
@@ -74,15 +73,15 @@ def get_args():
         action='store_true',
         help='Generate NTLMv2 aka NetNTLMv2')       
 
-    parser.add_argument('-lm',
+    parser.add_argument('--lm',
         action='store_true',
         help='Generate LAN Manager (LM) hash')
 
-    parser.add_argument('-ntlm',
+    parser.add_argument('--ntlm',
         action='store_true',
         help='Generate New Technology LAN Manager (NTLM) hash')
 
-    parser.add_argument('-lmntlm',
+    parser.add_argument('--lmntlm',
         action='store_true',
         help='Generate LM:NTLM pair')
 
@@ -98,7 +97,6 @@ def get_args():
         default=1000,
         help='Start at this Relative ID (RID).',)
 
-
     return parser
 
 
@@ -111,7 +109,7 @@ def preflight(parser, args):
     if (args.password and args.rand_pass):
         parser.error('--password and --rand-pass found. Please select only one password option.')
 
-    if (args.password and args.num > 1):
+    if (args.password and (args.num > 1)):
         # it does not make sense to provide both options.
         # the returned hash will always be the same.
         # this will be the same with input files of passwords.         
